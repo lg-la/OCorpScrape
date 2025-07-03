@@ -1,1 +1,209 @@
-print("Hello World")
+import time
+import csv
+import os
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait, Select
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+
+# Open Website
+driver = webdriver.Chrome()
+driver.get("https://opencorporates.com")
+
+# Let page load
+time.sleep(2)
+
+# Click login button
+try:
+    login_button = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, '//a[contains(@href, "/sign_in")]'))
+    )
+    driver.execute_script("arguments[0].click();", login_button)
+    print("✅ Login button clicked")
+except Exception as e:
+    print("❌ Failed to click login:", str(e))
+    driver.save_screenshot("failed_click.png")
+
+# Credentials
+email = "loganpark159@gmail.com"
+password = "Dkssud159!"
+
+# Input credentials and sign in
+try:
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "user_email")))
+    driver.find_element(By.ID, "user_email").send_keys(email)
+    driver.find_element(By.ID, "user_password").send_keys(password)
+
+    sign_in_button = WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((By.XPATH, "//button[@name='submit' and contains(text(), 'Sign in')]"))
+    )
+    driver.execute_script("arguments[0].click();", sign_in_button)
+    print("✅ Login form submitted")
+except Exception as e:
+    print("❌ Failed during login process:", str(e))
+    driver.save_screenshot("failed_login.png")
+
+# Wait for login to process
+time.sleep(3)
+
+# Input into search bar
+searchterm = "owners association"
+try:
+    search_input = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.NAME, "q"))
+    )
+    search_input.clear()
+    search_input.send_keys(searchterm)
+    print("✅ Search term entered")
+except Exception as e:
+    print("❌ Failed to enter search term:", str(e))
+    driver.save_screenshot("failed_search_input.png")
+
+# Open the dropdown
+dropdown_element = WebDriverWait(driver, 10).until(
+    EC.presence_of_element_located((By.NAME, "jurisdiction_code"))
+)
+
+WebDriverWait(driver, 10).until(
+    lambda d: len(d.find_element(By.NAME, "jurisdiction_code").find_elements(By.TAG_NAME, "option")) > 1
+)
+
+# Select California
+select = Select(driver.find_element(By.NAME, "jurisdiction_code"))
+for opt in select.options:
+    if opt.text.strip().lower() == "california":
+        opt.click()
+        print("✅ Selected California successfully")
+        break
+else:
+    print("❌ California not found in dropdown")
+
+# Click the search button
+search_button = WebDriverWait(driver, 10).until(
+    EC.element_to_be_clickable((By.CLASS_NAME, "oc-home-search_button"))
+)
+search_button.click()
+print("✅ Search button clicked")
+
+# Filter for active
+active_link = WebDriverWait(driver, 10).until(
+    EC.element_to_be_clickable((By.LINK_TEXT, "Active"))
+)
+active_link.click()
+
+# Grab all links on the first page
+links = driver.find_elements(By.CSS_SELECTOR, "a.company_search_result.active")
+urls = [link.get_attribute("href") for link in links if link.get_attribute("href")]
+
+# --- EDIT START: Load already-scraped URLs from CSV ---
+scraped_urls = set()
+csv_filename = "OCScraped.csv"
+
+# Check if the CSV file exists, if it does, read the scraped URLs from it
+if os.path.exists(csv_filename):
+    with open(csv_filename, "r", encoding="utf-8") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            scraped_urls.add(row.get("URL", "").strip())
+
+# If CSV file doesn't exist, create a new one with headers
+if not os.path.exists(csv_filename):
+    with open(csv_filename, "w", newline="", encoding='utf-8') as csvfile:
+        fieldnames = [
+            "URL", "Company Name", "Company Number", "Previous Company Numbers", "Status", "Incorporation Date",
+            "Company Type", "Jurisdiction", "Registered Address", "Agent Name", "Agent Address",
+        ]
+        for i in range(1, 6):
+            fieldnames.extend([f"Dir/Off {i}", f"Dir/Off Position {i}", f"Dir/Off Address {i}"])
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()  # Write header if new CSV is created
+# --- EDIT END ---
+
+# Open CSV file in append mode
+with open(csv_filename, "a", newline="", encoding='utf-8') as csvfile:
+    fieldnames = [
+        "URL", "Company Name", "Company Number", "Previous Company Numbers", "Status", "Incorporation Date",
+        "Company Type", "Jurisdiction", "Registered Address", "Agent Name", "Agent Address",
+    ]
+    for i in range(1, 6):
+        fieldnames.extend([f"Dir/Off {i}", f"Dir/Off Position {i}", f"Dir/Off Address {i}"])
+
+    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+    for url in urls:
+        # --- EDIT START: Skip if URL already scraped ---
+        if url in scraped_urls:
+            print(f"⏭️ Skipping already-scraped URL: {url}")
+            continue
+        # --- EDIT END ---
+
+        try:
+            driver.get(url)
+            time.sleep(300)
+
+            # Click "See all" if present
+            try:
+                see_all = driver.find_element(By.XPATH, "//a[text()='See all']")
+                see_all.click()
+                time.sleep(5)
+            except NoSuchElementException:
+                pass
+
+            def get_text(by, value):
+                try:
+                    return driver.find_element(by, value).text.strip()
+                except NoSuchElementException:
+                    return ""
+
+            data = {
+                "URL": url,  # --- EDIT: track URL in CSV ---
+                "Company Name": get_text(By.CSS_SELECTOR, "h1.wrapping_heading"),
+                "Company Number": get_text(By.CLASS_NAME, "company_number"),
+                "Previous Company Numbers": get_text(By.CLASS_NAME, "previous_company_numbers"),
+                "Status": get_text(By.CLASS_NAME, "status"),
+                "Incorporation Date": get_text(By.CLASS_NAME, "incorporation_date"),
+                "Company Type": get_text(By.CLASS_NAME, "company_type"),
+                "Jurisdiction": get_text(By.CLASS_NAME, "jurisdiction"),
+                "Registered Address": get_text(By.CLASS_NAME, "registered_address"),
+                "Agent Name": get_text(By.CLASS_NAME, "agent_name"),
+                "Agent Address": get_text(By.CLASS_NAME, "agent_address"),
+            }
+
+            officers = driver.find_elements(By.CSS_SELECTOR, ".officers .attribute_list li")[:5]
+            for i, officer in enumerate(officers, start=1):
+                try:
+                    name_position = officer.text.replace("SEE LESS", "").strip()
+                    name, position = name_position.split(",", 1)
+                    link = officer.find_element(By.CSS_SELECTOR, "a.officer")
+                    href = link.get_attribute("href")
+
+                    driver.execute_script("window.open(arguments[0]);", href)
+                    driver.switch_to.window(driver.window_handles[-1])
+                    time.sleep(5)
+
+                    try:
+                        address = get_text(By.CLASS_NAME, "address")
+                    except:
+                        address = ""
+
+                    driver.close()
+                    driver.switch_to.window(driver.window_handles[0])
+
+                    data[f"Dir/Off {i}"] = name.strip()
+                    data[f"Dir/Off Position {i}"] = position.strip()
+                    data[f"Dir/Off Address {i}"] = address.strip()
+                except Exception as e:
+                    print(f"⚠️ Could not extract officer {i}: {e}")
+
+            print(f"✅ Scraped: {data['Company Name']}")
+            writer.writerow(data)
+            time.sleep(10)
+
+        except StaleElementReferenceException:
+            print("⚠️ Stale element, skipping this entry.")
+            continue
+
+driver.quit()
+
